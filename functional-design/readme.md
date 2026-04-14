@@ -34,7 +34,7 @@ For a typical company with 10 trucks and 50 daily orders this leads to several p
 
 A web application where the user can:
 
-- Manage trucks and their properties (capacity, gross weight, dimensions and home depot).
+- Manage trucks and their properties (capacity, gross weight and dimensions).
 - Enter transport orders per day (customer, address, number of pallets, weight, type and time window).
 - Generate an optimised daily route plan with a single click.
 - Review the result visually on a map, including per-route and per-stop statistics.
@@ -53,21 +53,23 @@ The system accounts for the following constraints:
 
 ## Users and roles
 
-The system has a single user role the **planner**. In practice this is typically the business owner or a senior driver who handles the daily planning alongside other responsibilities. Authentication is handled through a passwordless login flow. The user enters their email address and receives a one-time verification code by email.
+Routeflow is organised around companies. A company represents a registered transport business and acts as the top-level entity in the system. All data trucks, orders, route plans and locations belong to a company and is only visible to users within that company. A company is created once during onboarding and managed by the admin. Each company has a name, a depot location and at least one user with the admin role.
+
+A company can have multiple users, each with their own role. Authentication is handled through a passwordless login flow. The user enters their email address and receives a one-time verification code by email.
+
+The system currently supports two roles **admin** and **planner**. A user can hold both roles simultaneously. In smaller companies it is common for the business owner to be the only user, acting as both admin and planner at the same time.
+
+### Admin
+
+The admin is responsible for managing company-level settings such as the company name, depot address and for managing user accounts within the company. Every company has at least one admin. In practice this is typically the business owner.
 
 ### Planner
 
-| Attribute | Description |
-|-----------|-------------|
-| Role | Creates daily route plans and manages master data (trucks, orders) |
-| Goal | Quickly generate an efficient plan, review it and approve or adjust it |
-| Frequency | Daily use |
-| Technical level | Basic computer skills (no technical background required) |
-| Environment | Desktop browser (office setting) with large screen preferred due to map view |
+The planner handles the daily route planning. They manage trucks and orders, generate route plans, review and adjust the result and finalise the plan once satisfied. A company can have multiple planners. In smaller operations the admin fulfils this role themselves, while larger companies may have a dedicated planner or senior driver who takes on this responsibility.
 
 ### Future extensions
 
-In a later version the system could be extended with an administrator role (for user management and company settings) and a read-only role for drivers (to view their own assigned route). These roles are outside the scope of this design.
+In a later version the system could be extended with a read-only **driver** role. Allowing individual drivers to view their own assigned route for the day. This role is outside the scope of this design.
 
 ---
 
@@ -83,19 +85,29 @@ The diagram below shows the core entities of the system and their relationships.
 hide circle
 skinparam linetype ortho
 
-entity "User" as user {
-  * id : UUID <<generated>>
+entity "Company" as company {
+  * id : UUID
   --
+  * name : string
+  * depot_location_id : UUID <<FK>>
+  * created_at : timestamp
+}
+
+entity "User" as user {
+  * id : UUID
+  --
+  * company_id : UUID <<FK>>
   * email : string
   * name : string
-  * company_name : string
+  * roles : enum[] (admin, planner)
   * created_at : timestamp
 }
 
 entity "Plan" as plan {
-  * id : UUID <<generated>>
+  * id : UUID
   --
-  * user_id : UUID <<FK>>
+  * company_id : UUID <<FK>>
+  * created_by : UUID <<FK>>
   * date : date
   * status : enum (pending, finalized)
   * total_distance : float
@@ -105,7 +117,7 @@ entity "Plan" as plan {
 }
 
 entity "Route" as route {
-  * id : UUID <<generated>>
+  * id : UUID
   --
   * plan_id : UUID <<FK>>
   * truck_id : UUID <<FK>>
@@ -118,25 +130,24 @@ entity "Route" as route {
 }
 
 entity "Stop" as stop {
-  * id : UUID <<generated>>
+  * id : UUID
   --
   * route_id : UUID <<FK>>
   * order_id : UUID <<FK>>
-  * location_id : UUID <<FK>>
   * sequence : integer
   * type : enum (load, unload)
   * pallet_delta : integer
   * expected_arrival : time
-  time_window : string
 }
 
 entity "Order" as order {
-  * id : UUID <<generated>>
+  * id : UUID
   --
-  * user_id : UUID <<FK>>
+  * company_id : UUID <<FK>>
+  * created_by : UUID <<FK>>
   * reference : string
   * customer_name : string
-  * delivery_location_id : UUID <<FK>>
+  * location_id : UUID <<FK>>
   * type : enum (load, unload)
   * pallet_count : integer
   * weight_kg : integer
@@ -150,9 +161,9 @@ entity "Order" as order {
 }
 
 entity "Truck" as truck {
-  * id : UUID <<generated>>
+  * id : UUID
   --
-  * user_id : UUID <<FK>>
+  * company_id : UUID <<FK>>
   * name : string
   * license_plate : string
   * capacity_pallets : integer
@@ -162,13 +173,11 @@ entity "Truck" as truck {
   * height_m : float
   * color : string
   * status : enum (available, unavailable)
-  * home_depot_id : UUID <<FK>>
 }
 
 entity "Location" as location {
-  * id : UUID <<generated>>
+  * id : UUID
   --
-  * user_id : UUID <<FK>>
   * name : string
   * address : string
   * city : string
@@ -177,147 +186,54 @@ entity "Location" as location {
   * longitude : float
 }
 
+company ||--o{ user : "has"
+company ||--o{ truck : "owns"
+company ||--o{ order : "has"
+company ||--o{ plan : "has"
+company }o--o| location : "depot"
 user ||--o{ plan : "creates"
 plan ||--o{ route : "contains"
 route }o--|| truck : "assigned to"
-route ||--o{ stop : "has ordered"
-stop }o--|| order : "for"
-stop }o--|| location : "at"
-order }o--|| location : "delivery address"
-truck }o--|| location : "home depot"
+route ||--o{ stop : "has"
+stop }o--|| order : "executes"
+order }o--|| location : "at"
 
 @enduml
 ```
 
 ### Entity descriptions
 
+#### Company
+
+A company represents a registered transport business. It is the top-level entity in the system all trucks, orders, locations and plans belong to a company. A company has a name and one depot location via `depot_location_id`. The depot location is initially set to the company's address during onboarding.
+
 #### User
 
-Represents a registered planner in the system.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| email | String | Yes | Email address, used for authentication |
-| name | String | Yes | Full name |
-| company_name | String | Yes | Name of the transport company |
-| created_at | Timestamp | Yes | Registration date |
-
-#### Plan
-
-Represents a single daily route plan. A plan contains multiple routes and tracks totals for travel time and distance.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| user_id | UUID (FK) | Yes | Reference to the creator |
-| date | Date | Yes | Planning date |
-| status | Enum | Yes | `pending`, `finalized` |
-| total_travel_time | Float | Yes | Sum of travel time across all routes (minutes) |
-| total_distance | Float | Yes | Sum of distance across all routes (km) |
-| total_orders | Integer | Yes | Total number of orders in this plan |
-| created_at | Timestamp | Yes | Creation timestamp |
-
-#### Truck
-
-A vehicle available for transport operations.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| user_id | UUID (FK) | Yes | Owner (planner) |
-| name | String | Yes | Recognisable name (e.g. "Truck 1") |
-| license_plate | String | Yes | License plate number |
-| capacity_pallets | Integer | Yes | Maximum load in pallets |
-| gross_weight_kg | Integer | Yes | Gross vehicle weight in kg (truck + trailer) |
-| length_m | Float | Yes | Vehicle length in metres |
-| width_m | Float | Yes | Vehicle width in metres |
-| height_m | Float | Yes | Vehicle height in metres |
-| color | String | Yes | Display colour used to identify the truck on the map |
-| status | Enum | Yes | `available`, `unavailable` |
-| home_depot_id | UUID (FK) | Yes | Reference to the depot location |
-
-#### Order
-
-A transport assignment for a specific date.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| user_id | UUID (FK) | Yes | Owner (planner) |
-| reference | String | Yes | Order number (e.g. ORD-13452) |
-| customer_name | String | Yes | Name of the customer |
-| delivery_location_id | UUID (FK) | Yes | Delivery address |
-| type | Enum | Yes | `load`, `unload` — determines whether pallets are added or removed at this stop |
-| pallet_count | Integer | Yes | Number of pallets |
-| weight_kg | Integer | Yes | Weight of the shipment in kg |
-| date | Date | Yes | The date this order must be executed |
-| time_window | Enum | Yes | `all_day`, `morning`, `afternoon`, `custom` |
-| time_window_start | Time | No | Earliest arrival time (only when time_window is `custom`) |
-| time_window_end | Time | No | Latest arrival time (only when time_window is `custom`) |
-| status | Enum | Yes | `unplanned`, `planned` |
-| notes | String | No | Free text field for special instructions |
-| created_at | Timestamp | Yes | Creation timestamp |
-
-#### Route
-
-A sequence of stops assigned to a single truck within a plan. The truck starts and ends at the home depot.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| plan_id | UUID (FK) | Yes | Reference to the plan |
-| truck_id | UUID (FK) | Yes | Assigned truck |
-| total_travel_time | Float | Yes | Total driving time for this route (minutes) |
-| total_distance | Float | Yes | Total distance (km) |
-| total_stops | Integer | Yes | Number of stops in this route |
-| start_load_pallets | Integer | Yes | Number of pallets loaded at departure from depot |
-| departure_time | Time | Yes | Departure time from depot |
-| expected_return_time | Time | Yes | Expected return time at depot |
-
-#### Stop
-
-An individual halt within a route.
-
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| route_id | UUID (FK) | Yes | Reference to the route |
-| order_id | UUID (FK) | Yes | Reference to the order |
-| location_id | UUID (FK) | Yes | Reference to the location |
-| sequence | Integer | Yes | Position in the route (1, 2, 3, ...) |
-| type | Enum | Yes | `load`, `unload` |
-| pallet_delta | Integer | Yes | Number of pallets added (load) or removed (unload) at this stop |
-| time_window | String | No | Human-readable time window (e.g. "08:00–11:00" or "All day") |
-| expected_arrival | Time | Yes | Expected arrival time |
+A user is a person within a company who has access to Routeflow. Every user belongs to exactly one company. A user can hold one or both of the following roles `admin` and `planner`. The admin role grants access to company settings and user management. The planner role grants access to daily route planning. In small companies the same person typically holds both roles. Authentication is done via email. The email address must be unique across the entire system.
 
 #### Location
 
-A physical address with coordinates.
+A location is a physical address with coordinates (latitude and longitude). Locations are reused across orders and trucks. A customer address only needs to be entered and geocoded once even if that customer receives deliveries on multiple days. One specific location is referenced by the company as its depot via `depot_location_id`. This is where all trucks depart from and return to each day.
 
-| Attribute | Type | Required | Description |
-|-----------|------|----------|-------------|
-| id | UUID | Yes | Unique identifier |
-| user_id | UUID (FK) | Yes | Owner (planner) |
-| name | String | Yes | Name of the location (e.g. "Depot Dronten") |
-| address | String | Yes | Full street address |
-| city | String | Yes | City |
-| country | String | Yes | Country code (default: NL) |
-| latitude | Float | Yes | Latitude (WGS84) |
-| longitude | Float | Yes | Longitude (WGS84) |
+#### Truck
 
-### Relationships
+A truck is a vehicle owned by the company and available for transport. Each truck has a name, a license plate and physical properties such as pallet capacity, gross weight and dimensions. The capacity in pallets determines how many orders the truck can carry at any point during its route. Each truck also has a display color used to distinguish it on the map. A truck can be set to unavailable to exclude it from route generation without deleting it. The depot a truck departs from and returns to is inherited from the company.
 
-| Relationship | Cardinality | Description |
-|-------------|-------------|-------------|
-| User → Plan | 1:N | A user creates multiple plans |
-| Plan → Route | 1:N | A plan contains multiple routes (one per deployed truck) |
-| Route → Truck | N:1 | Each route is assigned to exactly one truck |
-| Route → Stop | 1:N | A route has multiple ordered stops |
-| Stop → Order | N:1 | Each stop belongs to one order |
-| Stop → Location | N:1 | Each stop references one location |
-| Order → Location (delivery) | N:1 | Each order has one delivery location |
-| Truck → Location (home depot) | N:1 | Each truck has one home depot |
+#### Order
+
+An order is a transport assignment for a specific date. It represents what a customer needs such as number of pallets to be delivered or picked up at a specific location. An order has a type `load` means pallets are picked up at this stop (added to the truck) or `unload` means pallets are delivered (removed from the truck). Orders are date-specific and belong to exactly one planning date. An order is created by a planner and starts with the status `unplanned`. Once it is included in a finalised plan it becomes `planned`. If a plan is recalculated the order returns to `unplanned` until the plan is finalised again. The `reference` field holds an external order number such as `ORD-13452`, used to identify the order in external systems or communication with the customer.
+
+#### Plan
+
+A plan represents the complete route plan for a single day within a company. There is at most one plan per company per date. A plan contains multiple routes one for each truck that is deployed that day. The plan tracks totals for travel time, distance and number of orders across all routes. A plan starts with the status `pending` and moves to `finalized` once the planner approves it.
+
+#### Route
+
+A route is the sequence of stops assigned to a single truck within a plan. It inherits its date from the plan it belongs to. A route starts and ends at the company depot. It tracks the total travel time, total distance and number of stops for that truck. The `start_load_pallets` field records how many pallets are on the truck when it departs from the depot. The `departure_time` and `expected_return_time` are calculated based on the route's total travel time and the fixed service time per stop.
+
+#### Stop
+
+A stop is the execution of a single order within a route. It is created by the VRP algorithm when a plan is generated and is deleted and recreated when the plan is recalculated. The `sequence` field determines the order in which the truck visits its stops sequence 1 is the first stop after the depot, sequence 2 is the second and so on. When a planner manually reorders stops via drag-and-drop, the sequence numbers are updated accordingly. The `pallet_delta` records how many pallets are added or removed at this stop that is positive for load or negative for unload. The `expected_arrival` is the calculated arrival time at this stop based on the departure time and travel durations from OSRM.
 
 ---
 
@@ -495,6 +411,7 @@ Below is a description of each screen's content and expected behaviour.
 - Selecting Morning, Afternoon, or Custom shows the From/Until time fields with the appropriate default values.
 - On save, the order appears in the table for the selected date with status "Unplanned".
 - Once a route is generated and finalised for this date, the status changes to "Planned".
+- The address field supports autocomplete. When an order is saved, the entered address is automatically geocoded to a location with coordinates for use in route calculation. If the same address was entered before, the existing location is reused.
 
 ---
 
@@ -565,6 +482,7 @@ Each truck is shown as a card containing:
 - Changes to company name and depot address are saved independently from account changes (separate Save buttons per section).
 - The company name shown in the sidebar bottom is sourced from the Depot section.
 - Email changes take effect on the next login attempt.
+- When the depot address is saved, it is automatically geocoded to a location with coordinates for use in route calculation.
 
 ---
 
@@ -582,16 +500,16 @@ start
 :Select date using date picker;
 
 if (All orders for this date present?) then (No)
-  :Click "Add order";
-  :Fill in customer, address, type, pallets, weight, time window;
-  if (All required fields filled?) then (Yes)
-    :Save order;
-    :Order appears in table with status Unplanned;
-  else (No)
-    :Show validation error;
-    :Stay on form;
-    detach
-  endif
+  repeat
+    :Click "Add order";
+    :Fill in customer, address, type, pallets, weight, time window;
+    if (All required fields filled?) then (Yes)
+      :Save order;
+      :Order appears in table with status Unplanned;
+    else (No)
+      :Show validation error;
+    endif
+  repeat while (All required fields filled?) is (No)
 endif
 
 :Navigate to Routes screen;
@@ -602,26 +520,23 @@ if (All orders could be planned?) then (No)
   note right: Planner can adjust orders or accept
 endif
 
-:Review result per truck;
-note right: Departure time, return time,\nstart load, stops with pallet delta
+repeat
+  :Review result per truck;
+  note right: Departure time, return time,\nstart load, stops with pallet delta
 
-if (Stop sequence needs adjustment?) then (Yes)
-  :Drag stop to new position using handle;
-  :Map updates immediately;
-  if (Re-optimisation needed?) then (Yes)
-    :Click Recalculate;
-    :System re-runs VRP algorithm;
+  if (Stop sequence needs adjustment?) then (Yes)
+    :Drag stop to new position using handle;
+    :Map updates immediately;
+    if (Re-optimisation needed?) then (Yes)
+      :Click Recalculate;
+      :System re-runs VRP algorithm;
+    endif
   endif
-endif
+repeat while (Plan is correct?) is (No) -> Make further adjustments;
 
-if (Plan is correct?) then (Yes)
-  :Click Finalize;
-  :Plan status set to Finalized;
-  :All included orders marked as Planned;
-else (No)
-  :Make further adjustments;
-  detach
-endif
+:Click Finalize;
+:Plan status set to Finalized;
+:All included orders marked as Planned;
 
 stop
 @enduml
@@ -641,35 +556,36 @@ start
 :Click "Add order";
 :Form opens below table;
 
-:Fill in customer name and address;
-:Select type: Load or Unload;
-:Fill in pallets and weight (kg);
+repeat
+  :Fill in customer name and address;
+  :Select type: Load or Unload;
+  :Fill in pallets and weight (kg);
 
-if (Time window needed?) then (Yes)
-  if (Which time window?) then (Morning)
-    :Pre-fills 08:00–12:00;
-  else if (Afternoon) then (Afternoon)
-    :Pre-fills 12:00–17:00;
-  else if (Custom) then (Custom)
-    :Fill in From and Until time manually;
-  else (All day)
-    :No time restriction applied;
+  if (Time window needed?) then (Yes)
+    if (Which time window?) then (Morning)
+      :Pre-fills 08:00–12:00;
+    else if (Afternoon) then (Afternoon)
+      :Pre-fills 12:00–17:00;
+    else if (Custom) then (Custom)
+      :Fill in From and Until time manually;
+    else (All day)
+      :No time restriction applied;
+    endif
+  else (No)
+    :Leave as All day;
   endif
-else (No)
-  :Leave as All day;
-endif
 
-:Optionally add notes;
+  :Optionally add notes;
 
-if (All required fields valid?) then (Yes)
-  :Click Save;
-  :Order appears in table with status Unplanned;
-  :Order included in next route generation for this date;
-else (No)
-  :Show validation error;
-  :Stay on form;
-  detach
-endif
+  if (All required fields valid?) then (Yes)
+  else (No)
+    :Show validation error;
+  endif
+repeat while (All required fields valid?) is (No)
+
+:Click Save;
+:Order appears in table with status Unplanned;
+:Order included in next route generation for this date;
 
 stop
 @enduml
@@ -688,20 +604,21 @@ start
 :Click "Add truck";
 :Form opens below table;
 
-:Fill in truck name and license plate;
-:Fill in capacity (pallets) and gross weight (kg);
-:Fill in dimensions: length, width, height (m);
-:Set status to Available;
+repeat
+  :Fill in truck name and license plate;
+  :Fill in capacity (pallets) and gross weight (kg);
+  :Fill in dimensions: length, width, height (m);
+  :Set status to Available;
 
-if (All required fields filled?) then (Yes)
-  :Click Save;
-  :Truck appears in table with status Available;
-  :Truck is included in next route plan generation;
-else (No)
-  :Show validation error;
-  :Stay on form;
-  detach
-endif
+  if (All required fields filled?) then (Yes)
+  else (No)
+    :Show validation error;
+  endif
+repeat while (All required fields filled?) is (No)
+
+:Click Save;
+:Truck appears in table with status Available;
+:Truck is included in next route plan generation;
 
 stop
 @enduml
@@ -721,33 +638,32 @@ start
 :Enter email address;
 :Receive 6-digit verification code by email;
 
-if (Code valid?) then (Yes)
-  :Arrive at dashboard;
-  note right: Map is empty — no trucks or orders yet
-else (No)
-  :Show error: Invalid or expired code;
-  :Click Resend to get new code;
-  detach
-endif
+repeat
+  if (Code valid?) then (Yes)
+  else (No)
+    :Show error: Invalid or expired code;
+    :Click Resend to get new code;
+    :Receive new 6-digit verification code by email;
+  endif
+repeat while (Code valid?) is (No)
+
+:Arrive at dashboard;
+note right: Map is empty — no trucks or orders yet
 
 :Navigate to Settings;
 :Fill in company name and depot address;
 :Click Save under Depot section;
 
-:Navigate to Trucks;
-:Add at least one truck with capacity, gross weight and dimensions;
+repeat
+  :Navigate to Trucks;
+  :Add at least one truck with capacity, gross weight and dimensions;
+repeat while (At least one truck added?) is (No) -> Cannot generate routes without trucks;
 
-if (At least one truck added?) then (Yes)
-  :Navigate to Orders;
-  :Add orders for first planning date;
-  :Navigate to Routes;
-  :System generates first route plan;
-  :Review and finalize plan;
-else (No)
-  :Cannot generate routes without trucks;
-  :Return to Trucks screen;
-  detach
-endif
+:Navigate to Orders;
+:Add orders for first planning date;
+:Navigate to Routes;
+:System generates first route plan;
+:Review and finalize plan;
 
 stop
 @enduml
@@ -778,12 +694,12 @@ stop
 
 ### Route rules
 
-- Every route starts and ends at the home depot of the assigned truck.
+- Every route starts and ends at the company depot.
 - The start load at depot is the total pallet count of all load-type stops in the route (pallets that need to be picked up along the way start at zero; pallets to be delivered are loaded at the depot).
 
 ### Data rules
 
-- Email addresses must be unique per user.
+- Email addresses must be unique across the system.
 - Locations are stored with coordinates (latitude/longitude) in WGS84 format.
 - All times are stored and displayed in the Europe/Amsterdam timezone.
 - Orders are date-specific — they belong to exactly one planning date.
@@ -826,14 +742,18 @@ Verification codes expire after 10 minutes. If the user submits an expired code,
 
 If saving Settings fails due to a server error, an error message is shown below the Save button: "Something went wrong. Please try again." The form values are preserved so the user does not lose their input.
 
+---
 
 ## User validation
 
 The wireframes and domain model will be validated in two sessions one with a domain expert from the transport industry and one with two fellow students as proxy users. The questions and setup for each session have been prepared in advance and are described below. Results will be added after the sessions have taken place.
 
+The central validation question is: "Is the functional design of Routeflow complete and clear enough to serve as a basis for a technical design and implementation?"
+
 ### Validation session 1 — Domain expert
 
 **Who:** Owner of a transport company
+**Why:** A transport company owner was chosen because they can validate whether the domain model, constraints and wireframes reflect real daily practice in the transport industry.
 **When:** 
 **What was shown:** Wireframes in Balsamiq and domain model
 
@@ -860,6 +780,7 @@ The wireframes and domain model will be validated in two sessions one with a dom
 ### Validation session 2 — UX validation with fellow students
 
 **Who:** Two fellow software engineering students *(names to be filled in)*
+**Why:** Two fellow students were chosen as proxy users to validate whether the interface is intuitive without any domain knowledge. The goal of this session is to verify that a new user can complete the core flow adding orders and generating a route plan without explanation.
 **When:** 
 **What was shown:** Wireframes in Balsamiq
 
