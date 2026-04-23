@@ -16,3 +16,10 @@ Because for the problem solving you will also need to make some code, you can be
 ## planning & feedback
 In your graduation prep you've already signed off on regular times to ask feedback and process it. 
 Make sure you keep track of the feedback received. If you find it difficult to ask for regular feedback, ask your study coach (SLB'er) to make some time for you. It helps to make an arrangement like sitting down once every 2 weeks. But you are in charge! Don't expect help to automatically come your way. 
+
+
+In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole, filled with the ends
+of worms and an oozy smell, nor yet a dry, bare, sandy hole with nothing in it to sit down on or to
+eat: it was a [hobbit-hole][1], and that means comfort.
+
+[1]: <https://en.wikipedia.org/wiki/Hobbit#Lifestyle> "Hobbit lifestyles"

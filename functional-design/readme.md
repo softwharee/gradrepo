@@ -6,11 +6,13 @@
 
 **Routeflow** is a web application that automates daily route planning for small transport companies. It assigns transport orders to available trucks, determines the optimal stop sequence per truck and visualises the result on an interactive map.
 
-The application targets small transport companies operating fleets of 5 to 15 trucks handling 30 to 60 orders per day. At this scale hiring a dedicated transport planner is often not financially viable. Instead the business owner or a driver with additional responsibilities handles the daily planning. Typically spending one to two hours each day assembling routes manually. Routeflow replaces this manual process with an automated system that generates optimised plans in seconds. Allowing the owner to review and approve rather than build from scratch.
+The application targets small transport companies operating fleets of 5 to 15 trucks handling 30 to 60 orders per day. At this scale hiring a dedicated transport planner is often not financially viable. Instead the business owner or a driver with additional responsibilities handles the daily planning, typically spending one to two hours each day assembling routes manually. Routeflow replaces this manual process with an automated system that generates optimised plans in seconds, allowing the owner to review and approve rather than build from scratch.
 
-Route calculations are based on real driving distances and durations via OSRM (Open Source Routing Machine). Which uses OpenStreetMap data covering all of Europe.
+Route calculations are based on real driving distances and durations via OSRM (Open Source Routing Machine) [[1]](#ref-1), which uses OpenStreetMap data and can handle continental-sized networks such as Europe within milliseconds [[2]](#ref-2).
 
-The underlying problem the Vehicle Routing Problem (VRP) is a well known optimisation challenge in operations research. Its complexity grows exponentially with the number of trucks and orders. Which is precisely why manual planning breaks down as a business grows.
+The underlying problem the Vehicle Routing Problem (VRP) is a well known optimisation challenge in operations research. Its complexity grows exponentially with the number of trucks and orders [[3]](#ref-3). Which is precisely why manual planning breaks down as a business grows.
+
+Routeflow is built as a multi-tenant web application. Multiple transport companies can use the same instance simultaneously, with strict data isolation ensuring each company only sees its own trucks, orders and route plans.
 
 ---
 
@@ -18,11 +20,11 @@ The underlying problem the Vehicle Routing Problem (VRP) is a well known optimis
 
 ### Current situation
 
-In many small transport companies the daily route plan is assembled manually. The person responsible often the owner receives orders via email, phone or an ERP system and distributes them across available trucks based on experience and intuition. They consider factors like geography, delivery windows, truck capacity and driving time regulations but without the support of optimisation algorithms.
+In many small transport companies the daily route plan is assembled manually. The person responsible — often the owner — receives orders via email, phone or an ERP system and distributes them across available trucks based on experience and intuition. They consider factors like geography, delivery windows, truck capacity and driving time regulations, but without the support of optimisation algorithms.
 
 For a typical company with 10 trucks and 50 daily orders this leads to several problems:
 
-**Suboptimal routes** a human planner cannot evaluate all possible combinations. Trucks are often underloaded and drive unnecessary kilometres. A difference of 10-15% in total travel time compared to an optimised plan is realistic.
+**Suboptimal routes** a human planner cannot evaluate all possible combinations. Trucks are often underloaded and drive unnecessary kilometres. Research on the Vehicle Routing Problem shows that the difference between manual routing and the true optimal route is on average around 13% [[3]](#ref-3), so a 10-15% gap in total travel time compared to an optimised plan is a realistic estimate.
 
 **Time-intensive process** assembling a daily plan takes an experienced person one to two hours every day. For a business owner this is time that could be spent on customer relationships, exception handling or growing the business.
 
@@ -35,7 +37,8 @@ For a typical company with 10 trucks and 50 daily orders this leads to several p
 A web application where the user can:
 
 - Manage trucks and their properties (capacity, gross weight and dimensions).
-- Enter transport orders per day (customer, address, number of pallets, weight, type and time window).
+- Manage customers and their delivery locations centrally, so they can be reused across orders.
+- Enter transport orders per day (selecting a customer and location, plus number of pallets, weight, type and time window).
 - Generate an optimised daily route plan with a single click.
 - Review the result visually on a map, including per-route and per-stop statistics.
 - Make manual adjustments to the generated plan by reordering stops.
@@ -47,17 +50,19 @@ The system accounts for the following constraints:
 - Truck capacity in pallets.
 - Delivery time windows per order.
 - Load and unload type per stop (loading adds pallets and unloading removes pallets).
-- EU maximum driving time regulations (Regulation (EC) No 561/2006).
+- EU maximum driving time regulations (Regulation (EC) No 561/2006) [[4]](#ref-4).
 
 ---
 
 ## Users and roles
 
-Routeflow is organised around companies. A company represents a registered transport business and acts as the top-level entity in the system. All data trucks, orders, route plans and locations belong to a company and is only visible to users within that company. A company is created once during onboarding and managed by the admin. Each company has a name, a depot location and at least one user with the admin role.
+Routeflow is a multi-tenant application, meaning multiple transport companies can use the same instance of the system while their data remains completely isolated from each other. Each company operates in its own tenant and has no visibility into data from other companies.
+
+Routeflow is organised around companies. A company represents a registered transport business and acts as both the top-level entity in the system and the tenant boundary. All data — trucks, orders, route plans and locations — belongs to a company and is only visible to users within that company. A company is created once during onboarding and managed by the admin. Each company has a name, a depot location and at least one user with the admin role.
 
 A company can have multiple users, each with their own role. Authentication is handled through a passwordless login flow. The user enters their email address and receives a one-time verification code by email.
 
-The system currently supports two roles **admin** and **planner**. A user can hold both roles simultaneously. In smaller companies it is common for the business owner to be the only user, acting as both admin and planner at the same time.
+The system supports three roles **admin**, **planner** and **driver**. A user can hold multiple roles simultaneously. In smaller companies it is common for the business owner to be the only user, acting as both admin and planner at the same time, while drivers typically have only the driver role.
 
 ### Admin
 
@@ -67,9 +72,11 @@ The admin is responsible for managing company-level settings such as the company
 
 The planner handles the daily route planning. They manage trucks and orders, generate route plans, review and adjust the result and finalise the plan once satisfied. A company can have multiple planners. In smaller operations the admin fulfils this role themselves, while larger companies may have a dedicated planner or senior driver who takes on this responsibility.
 
-### Future extensions
+### Driver
 
-In a later version the system could be extended with a read-only **driver** role. Allowing individual drivers to view their own assigned route for the day. This role is outside the scope of this design.
+The driver is a read-only role intended for individual truck drivers. A driver has access to a simplified mobile-first view (delivered as a Progressive Web App) where they can see only their own assigned route for the selected day. This includes the stop sequence, customer names, addresses, pallet counts, load/unload type and time windows.
+
+Drivers cannot edit orders, trucks or route plans, and cannot see routes assigned to other drivers. A driver can be set as the default driver for a specific truck, in which case they are automatically assigned to that truck's route whenever a plan is generated. The planner can override this assignment per day, for example when the regular driver is sick or on holiday. This means the same driver can be assigned to truck A on Monday and truck B on Tuesday when needed.
 
 ---
 
@@ -99,7 +106,7 @@ entity "User" as user {
   * company_id : UUID <<FK>>
   * email : string
   * name : string
-  * roles : enum[] (admin, planner)
+  * roles : enum[] (admin, planner, driver)
   * created_at : timestamp
 }
 
@@ -121,6 +128,7 @@ entity "Route" as route {
   --
   * plan_id : UUID <<FK>>
   * truck_id : UUID <<FK>>
+  driver_id : UUID <<FK>>
   * total_distance : float
   * total_travel_time : float
   * total_stops : integer
@@ -146,7 +154,7 @@ entity "Order" as order {
   * company_id : UUID <<FK>>
   * created_by : UUID <<FK>>
   * reference : string
-  * customer_name : string
+  * customer_id : UUID <<FK>>
   * location_id : UUID <<FK>>
   * type : enum (load, unload)
   * pallet_count : integer
@@ -160,10 +168,20 @@ entity "Order" as order {
   * created_at : timestamp
 }
 
+entity "Customer" as customer {
+  * id : UUID
+  --
+  * company_id : UUID <<FK>>
+  * name : string
+  notes : string
+  * created_at : timestamp
+}
+
 entity "Truck" as truck {
   * id : UUID
   --
   * company_id : UUID <<FK>>
+  default_driver_id : UUID <<FK>>
   * name : string
   * license_plate : string
   * capacity_pallets : integer
@@ -178,7 +196,7 @@ entity "Truck" as truck {
 entity "Location" as location {
   * id : UUID
   --
-  * name : string
+  name : string
   * address : string
   * city : string
   * country : string
@@ -191,7 +209,12 @@ company ||--o{ truck : "owns"
 company ||--o{ order : "has"
 company ||--o{ plan : "has"
 company }o--o| location : "depot"
-user ||--o{ plan : "creates"
+company ||--o{ customer : "has"
+customer ||--o{ order : "places"
+customer ||--o{ location : "at"
+user |o--o{ plan : "creates"
+user |o--o{ truck : "default driver"
+user |o--o{ route : "drives"
 plan ||--o{ route : "contains"
 route }o--|| truck : "assigned to"
 route ||--o{ stop : "has"
@@ -209,19 +232,25 @@ A company represents a registered transport business. It is the top-level entity
 
 #### User
 
-A user is a person within a company who has access to Routeflow. Every user belongs to exactly one company. A user can hold one or both of the following roles `admin` and `planner`. The admin role grants access to company settings and user management. The planner role grants access to daily route planning. In small companies the same person typically holds both roles. Authentication is done via email. The email address must be unique across the entire system.
+A user is a person within a company who has access to Routeflow. Every user belongs to exactly one company. A user can hold one or more of the following roles `admin`, `planner` and `driver`. The admin role grants access to company settings and user management. The planner role grants access to daily route planning. The driver role grants read-only access to their own assigned route via the driver PWA. Roles can be combined freely, for example a user who both plans and drives. Authentication is done via email. The email address must be unique across the entire system.
 
 #### Location
 
-A location is a physical address with coordinates (latitude and longitude). Locations are reused across orders and trucks. A customer address only needs to be entered and geocoded once even if that customer receives deliveries on multiple days. One specific location is referenced by the company as its depot via `depot_location_id`. This is where all trucks depart from and return to each day.
+A location is a physical address with coordinates (latitude and longitude). Locations belong to a customer (or to the company, in the case of the depot). A customer can have multiple locations — for example a retail chain with different store addresses. A location address only needs to be entered and geocoded once and can be reused across orders. One specific location is referenced by the company as its depot via `depot_location_id`. This is where all trucks depart from and return to each day.
 
 #### Truck
 
 A truck is a vehicle owned by the company and available for transport. Each truck has a name, a license plate and physical properties such as pallet capacity, gross weight and dimensions. The capacity in pallets determines how many orders the truck can carry at any point during its route. Each truck also has a display color used to distinguish it on the map. A truck can be set to unavailable to exclude it from route generation without deleting it. The depot a truck departs from and returns to is inherited from the company.
 
+Optionally, a truck can have a default_driver_id referencing a user with the driver role. This represents the driver who normally operates this truck. When a route plan is generated, the default_driver_id of each assigned truck is automatically copied to Route.driver_id, so the planner does not need to assign drivers manually in the common case. The planner can override this per route on the Routes screen.
+
+#### Customer
+
+A customer is a business or individual that regularly places transport orders with the company. Storing customers as a separate entity means their details only need to be entered once and can be reused across orders. A customer belongs to exactly one company (tenant) and has a name and optional notes (for example delivery preferences or contact information). A customer can have multiple locations — for example a retail chain with multiple stores — and each order references both the customer and the specific location for that delivery.
+
 #### Order
 
-An order is a transport assignment for a specific date. It represents what a customer needs such as number of pallets to be delivered or picked up at a specific location. An order has a type `load` means pallets are picked up at this stop (added to the truck) or `unload` means pallets are delivered (removed from the truck). Orders are date-specific and belong to exactly one planning date. An order is created by a planner and starts with the status `unplanned`. Once it is included in a finalised plan it becomes `planned`. If a plan is recalculated the order returns to `unplanned` until the plan is finalised again. The `reference` field holds an external order number such as `ORD-13452`, used to identify the order in external systems or communication with the customer.
+An order is a transport assignment for a specific date. It represents what a customer needs such as number of pallets to be delivered or picked up at a specific location. An order references a customer_id (who the order is for) and a location_id (where it must be delivered or picked up). Because customers are stored separately, regular customers only need to be entered once and can be reused across orders. An order has a type `load` means pallets are picked up at this stop (added to the truck) or `unload` means pallets are delivered (removed from the truck). Orders are date-specific and belong to exactly one planning date. An order is created by a planner and starts with the status `unplanned`. Once it is included in a finalised plan it becomes `planned`. If a plan is recalculated the order returns to `unplanned` until the plan is finalised again. The `reference` field holds an external order number such as `ORD-13452`, used to identify the order in external systems or communication with the customer.
 
 #### Plan
 
@@ -231,23 +260,33 @@ A plan represents the complete route plan for a single day within a company. The
 
 A route is the sequence of stops assigned to a single truck within a plan. It inherits its date from the plan it belongs to. A route starts and ends at the company depot. It tracks the total travel time, total distance and number of stops for that truck. The `start_load_pallets` field records how many pallets are on the truck when it departs from the depot. The `departure_time` and `expected_return_time` are calculated based on the route's total travel time and the fixed service time per stop.
 
+The optional driver_id links the route to a user with the driver role. When a route plan is generated, driver_id is automatically initialised with the default_driver_id of the assigned truck. The planner can override this at any time via the driver dropdown on the Routes screen, for example when the regular driver is sick or on holiday. When assigned, the driver can view the route in the driver PWA. A route without a driver is still valid for planning purposes but has no one assigned to view it in the PWA.
+
 #### Stop
 
-A stop is the execution of a single order within a route. It is created by the VRP algorithm when a plan is generated and is deleted and recreated when the plan is recalculated. The `sequence` field determines the order in which the truck visits its stops sequence 1 is the first stop after the depot, sequence 2 is the second and so on. When a planner manually reorders stops via drag-and-drop, the sequence numbers are updated accordingly. The `pallet_delta` records how many pallets are added or removed at this stop that is positive for load or negative for unload. The `expected_arrival` is the calculated arrival time at this stop based on the departure time and travel durations from OSRM.
+A stop is the execution of a single order within a route. It is created by the VRP algorithm when a plan is generated and is deleted and recreated when the plan is recalculated. The sequence field determines the order in which the truck visits its stops sequence 1 is the first stop after the depot, sequence 2 is the second and so on. When a planner manually reorders stops via drag-and-drop, the sequence numbers are updated accordingly. The pallet_delta records how many pallets are added or removed at this stop that is positive for load or negative for unload. The expected_arrival is the calculated arrival time at this stop based on the departure time and travel durations from OSRM.
+Note: type and pallet_delta are derived from the linked order at the time of plan generation but stored on the stop itself. This preserves a snapshot of the plan at the moment it was generated and allows the system to detect when an order has been edited after the plan was created.
 
 ---
 
 ## Wireframes and behavior descriptions
 
-All wireframes have been designed in Balsamiq using a low-fidelity style (greyscale, no branding). The emphasis is on structure, information hierarchy, and interaction behaviour.
+All wireframes have been designed in Balsamiq using a low-fidelity style (greyscale, no branding). The emphasis is on structure, information hierarchy, and interaction behaviour. Each application has its own Balsamiq project:
 
-[View wireframes](https://balsamiq.cloud/slu85o1/p48stzw)
+- [View planner web app wireframes](https://balsamiq.cloud/slu85o1/p48stzw)
+- [View driver PWA wireframes](https://balsamiq.cloud/slu85o1/pmkibw6)
 
-Below is a description of each screen's content and expected behaviour.
+Below is a description of each screen's content and expected behaviour, grouped per application.
 
 ---
 
-### Screen 1 — Login
+### Planner web application
+
+The planner web application is designed for desktop use by admins and planners. It has a sidebar layout for navigation and consists of nine screens covering authentication, dashboard overview, fleet management, order and customer management, route planning, user management and company settings.
+
+---
+
+#### Screen 1 — Login
 
 **URL:** `https://app.routeflow.nl/login`
 
@@ -269,7 +308,7 @@ Below is a description of each screen's content and expected behaviour.
 
 ---
 
-### Screen 2 — Verify code
+#### Screen 2 — Verify code
 
 **URL:** `https://app.routeflow.nl/verify`
 
@@ -292,7 +331,7 @@ Below is a description of each screen's content and expected behaviour.
 
 ---
 
-### Screen 3 — Dashboard
+#### Screen 3 — Dashboard
 
 **URL:** `https://app.routeflow.nl/dashboard`
 
@@ -300,7 +339,7 @@ Below is a description of each screen's content and expected behaviour.
 
 **Content:**
 
-- Left sidebar with navigation: Dashboard (active), Trucks, Routes, Orders, Settings.
+- Left sidebar with navigation: Dashboard (active), Trucks, Orders, Customers, Routes, Users, Settings.
 - Bottom of sidebar: company name and logout button.
 - Main area: full-width interactive map showing all stops for the selected date as coloured pins. Each truck has its own colour; pins are numbered per truck.
 - Top-right overlay card showing plan summary for the selected date:
@@ -326,7 +365,7 @@ Below is a description of each screen's content and expected behaviour.
 
 ---
 
-### Screen 4 — Trucks
+#### Screen 4 — Trucks
 
 **URL:** `https://app.routeflow.nl/trucks`
 
@@ -340,6 +379,7 @@ Below is a description of each screen's content and expected behaviour.
   - Colour indicator (coloured square)
   - Name
   - License plate
+  - Default driver (driver name, or "—" if unassigned)
   - Capacity (pallets)
   - Gross weight (kg)
   - Status (Available / Unavailable badge)
@@ -353,6 +393,7 @@ Below is a description of each screen's content and expected behaviour.
 - Capacity in pallets (required, numeric)
 - Gross weight in kg (required, numeric — total weight of truck + trailer)
 - Dimensions: Length (m) / Width (m) / Height (m) — three fields side by side
+- Default driver (optional, dropdown showing all users with the driver role, plus an "Unassigned" option)
 - Status (dropdown: Available / Unavailable)
 - Buttons: Cancel / Save
 
@@ -362,10 +403,11 @@ Below is a description of each screen's content and expected behaviour.
 - Clicking "Add truck" opens the form empty.
 - On save, the truck appears in (or is updated in) the table.
 - On cancel, the form closes without changes.
+- The default driver, if set, is automatically assigned to this truck's route whenever a plan is generated. The planner can override this per day on the Routes screen.
 
 ---
 
-### Screen 5 — Orders
+#### Screen 5 — Orders
 
 **URL:** `https://app.routeflow.nl/orders`
 
@@ -388,8 +430,8 @@ Below is a description of each screen's content and expected behaviour.
 
 **Add / Edit form fields:**
 
-- Customer name (required)
-- Address (required)
+- Customer (required, dropdown showing all customers for this company, with a "+ Add new customer" option at the bottom that opens a quick-add modal)
+- Location (required, dropdown showing all locations of the selected customer, with a "+ Add new location" option that lets the user add a new address for this customer)
 - Type toggle: Load | Unload (mutually exclusive, one must be selected)
 - Date (required, pre-filled with the currently selected date)
 - Pallets (required, numeric)
@@ -411,11 +453,11 @@ Below is a description of each screen's content and expected behaviour.
 - Selecting Morning, Afternoon, or Custom shows the From/Until time fields with the appropriate default values.
 - On save, the order appears in the table for the selected date with status "Unplanned".
 - Once a route is generated and finalised for this date, the status changes to "Planned".
-- The address field supports autocomplete. When an order is saved, the entered address is automatically geocoded to a location with coordinates for use in route calculation. If the same address was entered before, the existing location is reused.
+- The Customer dropdown lists all customers of the company. Selecting a customer populates the Location dropdown with that customer's known locations. If the customer or location is new, the user can add it directly from the order form via the "+ Add new" options without leaving the page. New locations are automatically geocoded to coordinates for use in route calculation.
 
 ---
 
-### Screen 6 — Routes
+#### Screen 6 — Routes
 
 **URL:** `https://app.routeflow.nl/routes`
 
@@ -432,6 +474,7 @@ Below is a description of each screen's content and expected behaviour.
 Each truck is shown as a card containing:
 
 - Colour indicator and truck name with license plate
+- Driver selector (dropdown showing all users with the driver role, plus an "Unassigned" option; pre-filled with the truck's default driver if set)
 - Route summary: total time, total distance, number of stops
 - Departure time and expected return time at depot (e.g. "Departs 07:00 · Back at depot 14:30")
 - Start load in pallets (number of pallets on the truck when leaving the depot)
@@ -454,12 +497,89 @@ Each truck is shown as a card containing:
 - On first visiting the Routes screen for a date that has unplanned orders, the system automatically generates a route plan using the VRP algorithm and displays the result.
 - Clicking "Recalculate" re-runs the optimisation algorithm, for example after orders have been added or stop sequences have been changed manually.
 - The drag handle (≡) on each stop allows the planner to drag stops up or down within the same truck's route to manually adjust the sequence.
-- Clicking "Finalize" sets the plan status to "Finalized" and all included orders to "Planned". This action can be undone by recalculating.
+- Clicking "Finalize" sets the plan status to "Finalized" and all included orders to "Planned". This action can be undone by recalculating. If one or more routes have no driver assigned, a confirmation dialog appears: "X route(s) have no driver assigned. These routes will not be visible in the driver PWA until a driver is assigned. Finalize anyway?" with options [Cancel] and [Finalize anyway].
 - The map updates to reflect any manual reordering.
+- When a route plan is generated, the driver dropdown is pre-filled with the default_driver_id of the assigned truck. The planner can override this at any time by selecting a different driver or "Unassigned". The assigned driver will see this route in the driver PWA. Changing the driver can be done at any time, including after finalisation.
 
 ---
 
-### Screen 7 — Settings
+#### Screen 7 — Customers
+
+**URL:** `https://app.routeflow.nl/customers`
+
+**Purpose:** Manage customers and their locations — view, add, edit, and remove customers that regularly place transport orders.
+
+**Content:**
+
+- Page title: "Customers"
+- Button top-right: "Add customer"
+- Table with columns:
+  - Name
+  - Number of locations (e.g. "3 locations")
+  - Number of orders (total orders placed by this customer)
+  - Edit button per row
+- Below the table: edit form (visible when "Edit" or "Add customer" is clicked)
+
+**Edit / Add form fields:**
+
+- Name (required)
+- Notes (optional, text area)
+- Locations section: list of locations belonging to this customer, each with address and city. Button: "Add location"
+  - Per location: Address (required), City (required), Country (required), Delete button
+- Buttons: Cancel / Save / Delete (Delete only visible when editing)
+
+**Behaviour:**
+
+- Clicking "Edit" on a row opens the form below the table pre-filled with that customer's data and locations.
+- Clicking "Add customer" opens the form empty.
+- Clicking "Add location" within the form adds a new empty location row that the user can fill in.
+- On save, the customer and its locations are stored. Location addresses are automatically geocoded to coordinates for use in route calculation.
+- On cancel, the form closes without changes.
+- Deleting a customer that has active or historical orders is blocked with an error: "This customer has X order(s) and cannot be deleted. Remove those orders first or archive the customer."
+- Deleting a location that is referenced by any order is blocked with an error: "This location is used in X order(s) and cannot be deleted. Remove those orders first."
+
+---
+
+#### Screen 8 — Users
+
+**URL:** `https://app.routeflow.nl/users`
+
+**Purpose:** Manage user accounts within the company — view, add, edit, and remove users. Only accessible to users with the admin role.
+
+**Content:**
+
+- Page title: "Users"
+- Button top-right: "Add user"
+- Table with columns:
+  - Name
+  - Email
+  - Roles (badges showing Admin / Planner / Driver)
+  - Edit button per row
+- Below the table: edit form (visible when "Edit" or "Add user" is clicked)
+
+**Edit / Add form fields:**
+
+- Name (required)
+- Email (required, must be unique across the system)
+- Roles (checkboxes, at least one required):
+  - Admin
+  - Planner
+  - Driver
+- Buttons: Cancel / Save / Delete (Delete only visible when editing)
+
+**Behaviour:**
+
+- Clicking "Edit" on a row opens the form below the table pre-filled with that user's data.
+- Clicking "Add user" opens the form empty.
+- On save, the user appears in (or is updated in) the table. If a new user is added, they receive an invitation email with instructions to log in.
+- On cancel, the form closes without changes.
+- The Users navigation item in the sidebar is only visible to users with the admin role.
+- An admin cannot remove their own admin role if they are the only admin in the company — the system shows an error: "You cannot remove the last admin from the company."
+- Deleting a user that is currently assigned as a default driver on a truck is blocked with an error: "This user is assigned as default driver to one or more trucks. Remove those assignments first."
+
+---
+
+#### Screen 9 — Settings
 
 **URL:** `https://app.routeflow.nl/settings`
 
@@ -486,6 +606,90 @@ Each truck is shown as a card containing:
 
 ---
 
+### Driver PWA
+
+The driver PWA is a separate mobile-first interface accessed via `/drive`. It is designed for use on smartphones and can be installed as a Progressive Web App on the home screen. Drivers log in with the same passwordless email flow as planners, but the layout and navigation are optimised for touch interaction and small screens. The PWA consists of three screens: login, verify code, and the daily route view.
+
+---
+
+#### Screen 10 — Driver login (PWA)
+
+**URL:** `https://app.routeflow.nl/drive/login`
+
+**Purpose:** Authenticate the driver via a passwordless email code flow. This is the mobile-optimised equivalent of the planner login screen, designed for use on phones and delivered as part of the driver PWA.
+
+**Content:**
+
+- Label: "Step 1 of 2"
+- Heading: "Routeflow"
+- Instructional text: "Enter your email address to receive a login code."
+- Field: Email address
+- Button: "Send code"
+- Link: "No account yet? Contact us"
+
+**Behaviour:**
+
+- On submit the system sends a 6-digit verification code to the entered email address and redirects to the verify screen.
+- If the email address is not registered, no error is shown (for security reasons). The user sees the same confirmation regardless.
+- The layout is fully responsive and optimised for phone screens — full-width fields and buttons, centred content, large tap targets.
+
+---
+
+#### Screen 11 — Driver verify code (PWA)
+
+**URL:** `https://app.routeflow.nl/drive/verify`
+
+**Purpose:** Complete driver authentication by entering the received verification code.
+
+**Content:**
+
+- Label: "Step 2 of 2"
+- Heading: "Routeflow"
+- Instructional text: "We sent a 6-digit code to [email address]."
+- Field: Verification code
+- Button: "Log in"
+- Link: "Didn't receive a code? Resend"
+
+**Behaviour:**
+
+- On valid code the driver is redirected to the driver route view.
+- On invalid or expired code, an error message appears: "Invalid or expired code. Please try again."
+- Clicking "Resend" sends a new code and resets the expiry timer.
+- The layout is fully responsive and optimised for phone screens.
+
+---
+
+#### Screen 12 — Driver route view (PWA)
+
+**URL:** `https://app.routeflow.nl/drive`
+
+**Purpose:** Mobile-first view for drivers to see their assigned route for the day. Delivered as a Progressive Web App (PWA) so drivers can install it on their phone home screen.
+
+**Content:**
+
+- Top bar: Routeflow logo and driver name
+- Date navigation (defaults to today, with arrows to switch day)
+- Route summary card: assigned truck name and license plate, total travel time, total distance, total number of stops, departure time and expected return time at depot
+- Ordered stop list (scrollable), each stop showing:
+  - Sequence number
+  - Customer name
+  - Full address (street and city)
+  - Load / Unload badge
+  - Pallet delta (+X or −X pallets)
+  - Time window
+  - Notes (if present)
+  - "Open in Maps" button that launches the driver's default navigation app (Google Maps, Apple Maps, Waze) with the address pre-filled
+
+**Behaviour:**
+
+- The driver sees only the route assigned to them for the selected date. They cannot see routes of other drivers, orders from other companies, or any edit controls.
+- The date navigation arrows allow the driver to view routes for other days, for example to prepare for tomorrow.
+- If no route is assigned to the driver for the selected date, the screen shows: "No route assigned for this date. Check with your planner."
+- The page automatically reflects updates when the planner recalculates or finalises the plan.
+- The view is fully responsive and optimised for phone screens.
+
+---
+
 ## User flows
 
 ### Flow 1: Create a daily route plan
@@ -502,7 +706,7 @@ start
 if (All orders for this date present?) then (No)
   repeat
     :Click "Add order";
-    :Fill in customer, address, type, pallets, weight, time window;
+    :Select customer and location, fill in type, pallets, weight, time window;
     if (All required fields filled?) then (Yes)
       :Save order;
       :Order appears in table with status Unplanned;
@@ -523,6 +727,11 @@ endif
 repeat
   :Review result per truck;
   note right: Departure time, return time,\nstart load, stops with pallet delta
+
+  if (Driver needs to be changed?) then (Yes)
+    :Select different driver from dropdown;
+    note right: Default driver is pre-filled\nfrom the assigned truck
+  endif
 
   if (Stop sequence needs adjustment?) then (Yes)
     :Drag stop to new position using handle;
@@ -557,7 +766,10 @@ start
 :Form opens below table;
 
 repeat
-  :Fill in customer name and address;
+  :Select customer from dropdown;
+  note right: Or click "+ Add new customer"\nif not yet in the system
+  :Select location from dropdown;
+  note right: Or click "+ Add new location"\nfor an existing customer
   :Select type: Load or Unload;
   :Fill in pallets and weight (kg);
 
@@ -654,13 +866,19 @@ note right: Map is empty — no trucks or orders yet
 :Fill in company name and depot address;
 :Click Save under Depot section;
 
+:Navigate to Users;
+:Add users with driver role (optional);
+note right: Drivers can be added later\nRoutes can be generated without drivers
+
 repeat
   :Navigate to Trucks;
   :Add at least one truck with capacity, gross weight and dimensions;
+  note right: Optionally set a default driver per truck
 repeat while (At least one truck added?) is (No) -> Cannot generate routes without trucks;
 
 :Navigate to Orders;
 :Add orders for first planning date;
+note right: Customers and locations can be\nadded inline when creating an order
 :Navigate to Routes;
 :System generates first route plan;
 :Review and finalize plan;
@@ -682,7 +900,7 @@ stop
 
 ### Driving time rules
 
-- Maximum driving time per day is 9 hours per EU regulation (Regulation (EC) No 561/2006). This value is fixed and not configurable.
+- Maximum driving time per day is 9 hours per EU regulation (Regulation (EC) No 561/2006) [[4]](#ref-4). This value is fixed and not configurable.
 - The departure time and expected return time are calculated based on the route's total travel time and service time.
 
 ### Time window rules
@@ -696,6 +914,14 @@ stop
 
 - Every route starts and ends at the company depot.
 - The start load at depot is the total pallet count of all load-type stops in the route (pallets that need to be picked up along the way start at zero; pallets to be delivered are loaded at the depot).
+
+### Driver assignment rules
+
+- A truck can have an optional default_driver_id indicating the driver who normally operates that truck.
+- When a route plan is generated, Route.driver_id is automatically initialised with the default_driver_id of the assigned truck.
+- The planner can override Route.driver_id at any time, including after finalisation (for example when the regular driver calls in sick on the day itself).
+- A route without a driver is valid for planning purposes but is not visible in the driver PWA until a driver is assigned.
+- When finalising a plan, the system warns the planner if any routes still have no driver assigned, but does not block finalisation.
 
 ### Data rules
 
@@ -722,6 +948,10 @@ When the VRP algorithm cannot assign one or more orders (for example because tot
 
 When the planner navigates to the Routes screen but no trucks have the status "Available", the screen shows an empty state message: "No trucks available. Set at least one truck to Available on the Trucks page." The Recalculate and Finalize buttons are disabled.
 
+### Driver view — no route assigned
+
+When a driver opens the PWA for a date where no route has been assigned to them, the screen shows an empty state: "No route assigned for this date. Check with your planner." No stops or map are shown.
+
 ### Orders — empty date
 
 When the selected date has no orders, the order table shows an empty state: "No orders for this date. Click Add order to get started."
@@ -729,6 +959,10 @@ When the selected date has no orders, the order table shows an empty state: "No 
 ### Trucks — empty fleet
 
 When no trucks have been added yet, the trucks table shows an empty state: "No trucks yet. Click Add truck to add your first truck."
+
+### Trucks — no drivers available for default driver
+
+When the user opens the truck form but no users with the driver role exist yet, the Default driver dropdown shows only "Unassigned" with an informational text below the field: "No drivers available. Add users with the driver role on the Users page first."
 
 ### Login — invalid email format
 
@@ -810,3 +1044,15 @@ The central validation question is: "Is the functional design of Routeflow compl
 The following help was received during the creation of this functional design:
 
 ...
+
+---
+
+## Sources
+
+<a id="ref-1"></a>[1] Project OSRM. *Open Source Routing Machine*. <https://project-osrm.org/>
+
+<a id="ref-2"></a>[2] OpenStreetMap Wiki. *Open Source Routing Machine*. <https://wiki.openstreetmap.org/wiki/Open_Source_Routing_Machine>
+
+<a id="ref-3"></a>[3] Wikipedia contributors. *Vehicle routing problem*. <https://en.wikipedia.org/wiki/Vehicle_routing_problem>
+
+<a id="ref-4"></a>[4] European Parliament and Council of the European Union. *Regulation (EC) No 561/2006*. EUR-Lex. <https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:02006R0561>
