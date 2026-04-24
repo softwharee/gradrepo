@@ -48,9 +48,12 @@ The system accounts for the following constraints:
 
 - Travel time between locations based on real driving distances (via OSRM).
 - Truck capacity in pallets.
+- Maximum combined weight of truck plus load, as exceeding the gross vehicle weight can result in fines.
 - Delivery time windows per order.
-- Load and unload type per stop (loading adds pallets and unloading removes pallets).
-- EU maximum driving time regulations (Regulation (EC) No 561/2006) [[4]](#ref-4).
+- Load and unload type per stop (loading adds pallets, unloading removes pallets).
+- Service time per stop, which varies by unloading method (dock, tail lift or forklift) and scales with the number of pallets.
+- EU maximum driving time regulations (Regulation (EC) No 561/2006) [[4]](#ref-4), which limit a driver to 9 hours of driving per day.
+- Geographic scope limited to the European Union; orders with locations outside the EU are not supported.
 
 ---
 
@@ -202,6 +205,7 @@ entity "Location" as location {
   * country : string
   * latitude : float
   * longitude : float
+  * unload_method : enum (dock, tail_lift, forklift)
 }
 
 company ||--o{ user : "has"
@@ -238,6 +242,8 @@ A user is a person within a company who has access to Routeflow. Every user belo
 
 A location is a physical address with coordinates (latitude and longitude). Locations belong to a customer (or to the company, in the case of the depot). A customer can have multiple locations — for example a retail chain with different store addresses. A location address only needs to be entered and geocoded once and can be reused across orders. One specific location is referenced by the company as its depot via `depot_location_id`. This is where all trucks depart from and return to each day.
 
+Each location has an `unload_method` indicating how pallets are loaded or unloaded at this address. Possible values are `dock` (loading dock with ramp), `tail_lift` (truck-mounted lift) and `forklift` (external forklift available at the location). This value is used by the planning algorithm to calculate service time per stop, as different unload methods take different amounts of time per pallet. Addresses outside the European Union are not supported.
+
 #### Truck
 
 A truck is a vehicle owned by the company and available for transport. Each truck has a name, a license plate and physical properties such as pallet capacity, gross weight and dimensions. The capacity in pallets determines how many orders the truck can carry at any point during its route. Each truck also has a display color used to distinguish it on the map. A truck can be set to unavailable to exclude it from route generation without deleting it. The depot a truck departs from and returns to is inherited from the company.
@@ -258,7 +264,7 @@ A plan represents the complete route plan for a single day within a company. The
 
 #### Route
 
-A route is the sequence of stops assigned to a single truck within a plan. It inherits its date from the plan it belongs to. A route starts and ends at the company depot. It tracks the total travel time, total distance and number of stops for that truck. The `start_load_pallets` field records how many pallets are on the truck when it departs from the depot. The `departure_time` and `expected_return_time` are calculated based on the route's total travel time and the fixed service time per stop.
+A route is the sequence of stops assigned to a single truck within a plan. It inherits its date from the plan it belongs to. A route starts and ends at the company depot. It tracks the total travel time, total distance and number of stops for that truck. The `start_load_pallets` field records how many pallets are on the truck when it departs from the depot. The `departure_time` is determined by the planning algorithm to be the latest possible departure from the depot such that all stops on this route can still be served within their time windows. The `expected_return_time` is calculated based on the departure time, the total travel time from OSRM and the service time of each stop. Service time is derived from the `unload_method` of each stop's location and the number of pallets.
 
 The optional driver_id links the route to a user with the driver role. When a route plan is generated, driver_id is automatically initialised with the default_driver_id of the assigned truck. The planner can override this at any time via the driver dropdown on the Routes screen, for example when the regular driver is sick or on holiday. When assigned, the driver can view the route in the driver PWA. A route without a driver is still valid for planning purposes but has no one assigned to view it in the PWA.
 
@@ -266,6 +272,60 @@ The optional driver_id links the route to a user with the driver role. When a ro
 
 A stop is the execution of a single order within a route. It is created by the VRP algorithm when a plan is generated and is deleted and recreated when the plan is recalculated. The sequence field determines the order in which the truck visits its stops sequence 1 is the first stop after the depot, sequence 2 is the second and so on. When a planner manually reorders stops via drag-and-drop, the sequence numbers are updated accordingly. The pallet_delta records how many pallets are added or removed at this stop that is positive for load or negative for unload. The expected_arrival is the calculated arrival time at this stop based on the departure time and travel durations from OSRM.
 Note: type and pallet_delta are derived from the linked order at the time of plan generation but stored on the stop itself. This preserves a snapshot of the plan at the moment it was generated and allows the system to detect when an order has been edited after the plan was created.
+
+---
+
+## Planning logic
+
+This section describes how the route generation algorithm behaves from a functional perspective. The algorithmic details (which heuristic, implementation choices) are covered in the technical design; this section defines what the algorithm must achieve and how it handles common situations.
+
+### Hard constraints
+
+The following constraints must be satisfied by any generated plan. A route that violates a hard constraint is never produced.
+
+- **Truck capacity in pallets.** At no point during the route may the number of pallets on the truck exceed `capacity_pallets`.
+- **Truck maximum weight.** At no point during the route may the total weight on the truck exceed `gross_weight_kg`. Weight is tracked per stop based on the `weight_kg` of each order.
+- **Time windows.** Every stop must be visited within the time window of its order (`all_day`, `morning`, `afternoon` or `custom`).
+- **Maximum driving time per route.** In line with EU Regulation (EC) No 561/2006, a single route may not contain more than 9 hours of driving time between depot departure and depot return.
+- **Depot start and end.** Every route starts and ends at the company depot.
+
+### Soft constraints (optimisation objective)
+
+Subject to the hard constraints, the algorithm minimises total travel time across all routes in the plan. Total distance is tracked for reporting purposes but is not directly optimised.
+
+### Service time per stop
+
+Each stop has a service time representing the duration the truck is at the location. Service time is calculated as:
+
+service_time = base_time(unload_method) + per_pallet_time(unload_method) × pallet_count
+
+The unload method is a property of the location and can be `dock`, `tail_lift` or `forklift`. The following base and per-pallet values are used:
+
+| Unload method | Base time | Per pallet |
+|---------------|-----------|------------|
+| Dock          | 15 min    | 1 min      |
+| Tail lift     | 15 min    | 3 min      |
+| Forklift      | 15 min    | 2 min      |
+
+For example, unloading 10 pallets at a location with a tail lift takes 15 + (3 × 10) = 45 minutes. The calculated service time is added to the route's total travel time and used when checking time window compliance.
+
+### Departure time
+
+The departure time of each route is not fixed but calculated by the algorithm. For each truck, the algorithm determines the latest possible departure time from the depot such that all stops on the route can still be served within their time windows. This means a truck with only afternoon deliveries departs later than a truck with early morning stops, which reduces unnecessary waiting time at locations.
+
+### Unplannable orders
+
+If an order cannot be assigned to any truck without violating a hard constraint, the algorithm first tries to assign it to another truck. If no truck can accommodate it, the order remains unplanned and is reported back to the planner. The planner is shown a warning listing the unplannable orders and can either adjust them (for example by splitting, removing or changing their time window) or accept the plan without them.
+
+### Concurrent planning prevention
+
+Only one plan per company per date can exist at any time. If a planner opens the Routes screen for a date while another planner is already generating a plan for that same date, the second planner sees a warning: "A plan is currently being generated for this date. Please wait and refresh." This prevents two planners from overwriting each other's work.
+
+### External service behaviour
+
+- **OSRM** (Open Source Routing Machine) is self-hosted on the same infrastructure as the application and is treated as always available. If OSRM is temporarily unreachable due to infrastructure issues, the system shows a generic error: "Route generation is temporarily unavailable. Please try again shortly."
+- **Geocoding** of new addresses uses an external geocoding API. If geocoding is slow or temporarily unavailable, the user sees a loading state and the save action is retried. Addresses that cannot be geocoded after retries are rejected with an error: "This address could not be found. Please verify and try again."
+- **Geographic scope.** Addresses outside the European Union are rejected at geocoding time with the error: "Routeflow currently only supports addresses within the European Union."
 
 ---
 
@@ -394,13 +454,14 @@ The planner web application is designed for desktop use by admins and planners. 
 - Gross weight in kg (required, numeric — total weight of truck + trailer)
 - Dimensions: Length (m) / Width (m) / Height (m) — three fields side by side
 - Default driver (optional, dropdown showing all users with the driver role, plus an "Unassigned" option)
+- Colour (required, colour picker — used to distinguish this truck on the map; auto-assigned on creation but can be changed)
 - Status (dropdown: Available / Unavailable)
 - Buttons: Cancel / Save
 
 **Behaviour:**
 
 - Clicking "Edit" on a row opens the form below the table pre-filled with that truck's data.
-- Clicking "Add truck" opens the form empty.
+- Clicking "Add truck" opens the form empty, with a default colour pre-selected from a palette of distinct colours. The planner can change it before saving.
 - On save, the truck appears in (or is updated in) the table.
 - On cancel, the form closes without changes.
 - The default driver, if set, is automatically assigned to this truck's route whenever a plan is generated. The planner can override this per day on the Routes screen.
@@ -430,8 +491,9 @@ The planner web application is designed for desktop use by admins and planners. 
 
 **Add / Edit form fields:**
 
-- Customer (required, dropdown showing all customers for this company, with a "+ Add new customer" option at the bottom that opens a quick-add modal)
-- Location (required, dropdown showing all locations of the selected customer, with a "+ Add new location" option that lets the user add a new address for this customer)
+- Reference (optional, text field — external order number such as "ORD-13452")
+- Customer (required, dropdown showing all customers for this company, with a "+ Add new customer" option at the bottom that expands an inline mini-form with fields: Name (required), Notes (optional). On save the new customer is added to the dropdown and selected.)
+- Location (required, dropdown showing all locations of the selected customer, with a "+ Add new location" option that expands an inline mini-form with fields: Address (required), City (required), Country (required), Unload method (required, dropdown: Dock / Tail lift / Forklift). On save the new location is geocoded, added to the dropdown and selected.)
 - Type toggle: Load | Unload (mutually exclusive, one must be selected)
 - Date (required, pre-filled with the currently selected date)
 - Pallets (required, numeric)
@@ -485,6 +547,7 @@ Each truck is shown as a card containing:
   - City and time window
   - Pallet delta: green "+X pallets" for load, red "−X pallets" for unload
   - Drag handle (≡) on the right for manual reordering
+- If another planner in the same company is already generating a plan for the selected date, the screen shows a warning: "A plan is currently being generated for this date. Please wait and refresh."
 
 **Right panel — map:**
 
@@ -525,7 +588,7 @@ Each truck is shown as a card containing:
 - Name (required)
 - Notes (optional, text area)
 - Locations section: list of locations belonging to this customer, each with address and city. Button: "Add location"
-  - Per location: Address (required), City (required), Country (required), Delete button
+  - Per location: Address (required), City (required), Country (required), Unload method (required, dropdown: Dock / Tail lift / Forklift), Delete button
 - Buttons: Cancel / Save / Delete (Delete only visible when editing)
 
 **Behaviour:**
@@ -591,6 +654,7 @@ Each truck is shown as a card containing:
 - Section "Depot":
   - Company name (required, text field, pre-filled)
   - Depot address (required, text field, pre-filled)
+  - Depot unload method (required, dropdown: Dock / Tail lift / Forklift, pre-filled)
   - Save button
 - Section "Account":
   - Name (required, text field, pre-filled)
@@ -720,8 +784,14 @@ endif
 :System runs VRP algorithm for selected date;
 
 if (All orders could be planned?) then (No)
-  :Show warning: X orders could not be planned;
-  note right: Planner can adjust orders or accept
+  :Show warning listing X unplannable orders;
+  note right: Orders that do not fit in any truck\nwithout violating capacity, weight,\ntime windows or max driving time
+  if (Planner adjusts orders?) then (Yes)
+    :Edit or remove orders;
+    :Click Recalculate;
+  else (No)
+    :Accept plan without unplannable orders;
+  endif
 endif
 
 repeat
@@ -772,6 +842,7 @@ repeat
   note right: Or click "+ Add new location"\nfor an existing customer
   :Select type: Load or Unload;
   :Fill in pallets and weight (kg);
+  :Optionally fill in external reference number;
 
   if (Time window needed?) then (Yes)
     if (Which time window?) then (Morning)
@@ -821,6 +892,7 @@ repeat
   :Fill in capacity (pallets) and gross weight (kg);
   :Fill in dimensions: length, width, height (m);
   :Set status to Available;
+  :Optionally select default driver;
 
   if (All required fields filled?) then (Yes)
   else (No)
